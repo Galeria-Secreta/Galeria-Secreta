@@ -1,3 +1,7 @@
+// Import Supabase modules
+import { authManager } from './lib/auth.js'
+import { dbManager } from './lib/database.js'
+
 // DOM Elements
 const navbar = document.getElementById('navbar');
 const navToggle = document.getElementById('nav-toggle');
@@ -32,6 +36,7 @@ let isSubmitting = false;
 let formData = {};
 let galleryVisible = false;
 let profilesData = {};
+let modelsData = [];
 
 // Enhanced Navigation functionality
 document.addEventListener('DOMContentLoaded', function() {
@@ -46,8 +51,9 @@ function initializeApp() {
     setupFormAutoSave();
     preloadCriticalResources();
     createScrollToTopButton();
-    initializeProfilesData();
+    await loadModelsFromDatabase();
     setupProfileEvents();
+    setupAuthEvents();
     
     // Show page after initialization
     setTimeout(() => {
@@ -99,6 +105,90 @@ function setupEventListeners() {
     
     // Keyboard events
     setupKeyboardEvents();
+}
+
+// Auth Events
+function setupAuthEvents() {
+    // Listen for auth state changes
+    authManager.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN') {
+            showNotification('Login realizado com sucesso!', 'success');
+        } else if (event === 'SIGNED_OUT') {
+            showNotification('Logout realizado com sucesso!', 'info');
+        }
+    });
+}
+
+// Load models from database
+async function loadModelsFromDatabase() {
+    try {
+        const result = await dbManager.getModels();
+        if (result.success) {
+            modelsData = result.data;
+            updateAcompanhantesSection();
+            // Keep static data as fallback
+            initializeProfilesData();
+        } else {
+            console.error('Error loading models:', result.error);
+            // Use static data as fallback
+            initializeProfilesData();
+        }
+    } catch (error) {
+        console.error('Error loading models:', error);
+        // Use static data as fallback
+        initializeProfilesData();
+    }
+}
+
+// Update acompanhantes section with database data
+function updateAcompanhantesSection() {
+    const acompanhantesGrid = document.querySelector('.acompanhantes-grid');
+    if (!acompanhantesGrid || modelsData.length === 0) return;
+    
+    // Clear existing content
+    acompanhantesGrid.innerHTML = '';
+    
+    // Add models from database
+    modelsData.forEach(model => {
+        const modelCard = createModelCard(model);
+        acompanhantesGrid.appendChild(modelCard);
+    });
+}
+
+function createModelCard(model) {
+    const card = document.createElement('div');
+    card.className = 'acompanhante-card';
+    
+    const mainImage = model.main_photo_url || 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=400';
+    
+    card.innerHTML = `
+        <div class="acompanhante-image">
+            <img src="${mainImage}" alt="Modelo ${model.stage_name}" loading="lazy">
+            <div class="acompanhante-overlay">
+                <div class="acompanhante-info">
+                    <h3>${model.stage_name}</h3>
+                    <p>${model.category}</p>
+                    <div class="acompanhante-details">
+                        <span>${model.age} anos</span>
+                        <span>${model.location}</span>
+                    </div>
+                    <button class="btn-view-profile" data-profile="${model.id}">
+                        Ver Perfil
+                        <div class="btn-shine"></div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Add click event
+    card.addEventListener('click', function(e) {
+        if (e.target.classList.contains('btn-view-profile')) return;
+        openDatabaseProfile(model.id);
+    });
+    
+    card.style.cursor = 'pointer';
+    return card;
 }
 
 // Initialize profiles data
@@ -266,7 +356,12 @@ function setupProfileEvents() {
             e.preventDefault();
             e.stopPropagation();
             const profileId = this.getAttribute('data-profile');
-            openProfile(profileId);
+            // Check if it's a database ID (UUID) or static profile
+            if (profileId.length > 10) {
+                openDatabaseProfile(profileId);
+            } else {
+                openProfile(profileId);
+            }
         });
     });
     
@@ -279,13 +374,148 @@ function setupProfileEvents() {
             const btn = this.querySelector('.btn-view-profile');
             if (btn) {
                 const profileId = btn.getAttribute('data-profile');
-                openProfile(profileId);
+                if (profileId.length > 10) {
+                    openDatabaseProfile(profileId);
+                } else {
+                    openProfile(profileId);
+                }
             }
         });
         
         // Add cursor pointer to indicate clickability
         card.style.cursor = 'pointer';
     });
+}
+
+// Open database profile
+async function openDatabaseProfile(modelId) {
+    try {
+        showLoading(true);
+        
+        const result = await dbManager.getModelById(modelId);
+        if (!result.success) {
+            throw new Error(result.error);
+        }
+        
+        const model = result.data;
+        
+        // Populate profile data
+        document.getElementById('profile-name').textContent = model.stage_name;
+        document.getElementById('profile-category').textContent = model.category;
+        document.getElementById('profile-age').textContent = `${model.age} anos`;
+        document.getElementById('profile-location').textContent = model.location;
+        
+        const mainImage = model.main_photo_url || 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=400';
+        document.getElementById('profile-main-img').src = mainImage;
+        document.getElementById('profile-main-img').alt = `Foto de ${model.stage_name}`;
+        
+        document.getElementById('profile-bio').textContent = model.bio || 'Informações sobre esta modelo em breve...';
+        document.getElementById('profile-availability').textContent = model.availability || '24/7';
+        
+        // Populate gallery
+        const galleryContainer = document.getElementById('profile-gallery');
+        galleryContainer.innerHTML = '';
+        
+        const gallery = model.gallery_photos && model.gallery_photos.length > 0 
+            ? model.gallery_photos 
+            : [mainImage];
+            
+        gallery.forEach((imageUrl, index) => {
+            const galleryItem = document.createElement('div');
+            galleryItem.className = 'gallery-item';
+            galleryItem.innerHTML = `
+                <img src="${imageUrl}" alt="Foto ${index + 1} de ${model.stage_name}" loading="lazy">
+            `;
+            
+            galleryItem.addEventListener('click', () => {
+                openImageFullscreen(imageUrl, model.stage_name);
+            });
+            
+            galleryContainer.appendChild(galleryItem);
+        });
+        
+        // Populate services
+        const servicesContainer = document.getElementById('profile-services');
+        servicesContainer.innerHTML = '';
+        
+        if (model.model_services && model.model_services.length > 0) {
+            model.model_services.forEach(modelService => {
+                const service = modelService.service;
+                const serviceItem = document.createElement('div');
+                serviceItem.className = 'service-item';
+                serviceItem.innerHTML = `
+                    <div class="service-icon">${service.icon || '⭐'}</div>
+                    <div class="service-details">
+                        <h5>${service.name}</h5>
+                        <p>${service.description || 'Serviço profissional de qualidade'}</p>
+                        ${modelService.custom_price ? `<span class="service-price">${modelService.custom_price} MT</span>` : ''}
+                    </div>
+                `;
+                servicesContainer.appendChild(serviceItem);
+            });
+        } else {
+            servicesContainer.innerHTML = '<p>Serviços disponíveis sob consulta.</p>';
+        }
+        
+        // Populate specialties
+        const specialtiesContainer = document.getElementById('profile-specialties');
+        specialtiesContainer.innerHTML = '';
+        
+        if (model.specialties && model.specialties.length > 0) {
+            model.specialties.forEach(specialty => {
+                const specialtyTag = document.createElement('span');
+                specialtyTag.className = 'specialty-tag';
+                specialtyTag.textContent = specialty;
+                specialtiesContainer.appendChild(specialtyTag);
+            });
+        } else {
+            const defaultSpecialties = ['Elegância', 'Profissionalismo', 'Discrição'];
+            defaultSpecialties.forEach(specialty => {
+                const specialtyTag = document.createElement('span');
+                specialtyTag.className = 'specialty-tag';
+                specialtyTag.textContent = specialty;
+                specialtiesContainer.appendChild(specialtyTag);
+            });
+        }
+        
+        // Setup WhatsApp link
+        const whatsappBtn = document.getElementById('profile-whatsapp');
+        const whatsappMessage = encodeURIComponent(`Olá ${model.stage_name}! Vi o seu perfil na Galeria Secreta e gostaria de saber mais sobre os seus serviços. Estou interessado em marcar um encontro.`);
+        const whatsappNumber = model.whatsapp ? model.whatsapp.replace(/[^\d]/g, '') : '258853131185';
+        whatsappBtn.href = `https://wa.me/${whatsappNumber}?text=${whatsappMessage}`;
+        
+        whatsappBtn.addEventListener('click', function(e) {
+            console.log(`WhatsApp contact initiated for ${model.stage_name}`);
+            showNotification(`Redirecionando para WhatsApp de ${model.stage_name}...`, 'info');
+        });
+        
+        // Setup call button
+        const callBtn = document.getElementById('profile-call');
+        const newCallBtn = callBtn.cloneNode(true);
+        callBtn.parentNode.replaceChild(newCallBtn, callBtn);
+        
+        newCallBtn.addEventListener('click', function() {
+            showNotification(`Iniciando chamada para ${model.stage_name}...`, 'info');
+            setTimeout(() => {
+                window.location.href = `tel:${model.whatsapp || '+258853131185'}`;
+            }, 1000);
+        });
+        
+        // Open modal
+        openModal(profileModal);
+        
+        // Scroll to top of modal content
+        const profileContent = document.querySelector('.profile-content');
+        if (profileContent) {
+            profileContent.scrollTop = 0;
+        }
+        
+    } catch (error) {
+        console.error('Error opening profile:', error);
+        showNotification('Erro ao carregar perfil: ' + error.message, 'error');
+    } finally {
+        showLoading(false);
+    }
 }
 
 function openProfile(profileId) {
@@ -730,18 +960,13 @@ async function handleApplicationSubmit(e) {
 
     try {
         const formData = new FormData(applicationForm);
-        formData.append('timestamp', new Date().toISOString());
-
-        const response = await fetchWithRetry('/api/candidatura', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (response.ok) {
+        
+        const result = await dbManager.submitCandidatura(formData);
+        
+        if (result.success) {
             handleSubmissionSuccess();
         } else {
-            const result = await response.json();
-            throw new Error(result.detalhe || result.error || 'Erro desconhecido');
+            throw new Error(result.error || 'Erro desconhecido');
         }
     } catch (error) {
         handleSubmissionError(error);
@@ -768,15 +993,20 @@ async function handleLoginSubmit(e) {
     submitBtn.disabled = true;
 
     try {
-        // Simulate login process
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
         
-        showNotification('Login realizado com sucesso!', 'success');
-        closeModal(loginModal);
-        loginForm.reset();
-        clearFormErrors(loginForm);
+        const result = await authManager.signIn(email, password);
+        
+        if (result.success) {
+            closeModal(loginModal);
+            loginForm.reset();
+            clearFormErrors(loginForm);
+        } else {
+            throw new Error(result.error);
+        }
     } catch (error) {
-        showNotification('Erro no login: ' + error.message, 'error');
+        showNotification('Erro no login: ' + (error.message || error), 'error');
     } finally {
         btnText.style.display = 'inline';
         btnLoader.style.display = 'none';
@@ -810,15 +1040,27 @@ async function handleSignupSubmit(e) {
     submitBtn.disabled = true;
 
     try {
-        // Simulate signup process
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        const name = document.getElementById('signup-name').value;
+        const email = document.getElementById('signup-email').value;
+        const password = document.getElementById('signup-password').value;
         
-        showNotification('Conta criada com sucesso! Bem-vindo à Galeria Secreta!', 'success');
-        closeModal(signupModal);
-        form.reset();
-        clearFormErrors(form);
+        const userData = {
+            full_name: name,
+            role: 'client'
+        };
+        
+        const result = await authManager.signUp(email, password, userData);
+        
+        if (result.success) {
+            showNotification('Conta criada com sucesso! Verifique o seu email para confirmar a conta.', 'success');
+            closeModal(signupModal);
+            form.reset();
+            clearFormErrors(form);
+        } else {
+            throw new Error(result.error);
+        }
     } catch (error) {
-        showNotification('Erro ao criar conta: ' + error.message, 'error');
+        showNotification('Erro ao criar conta: ' + (error.message || error), 'error');
     } finally {
         btnText.style.display = 'inline';
         btnLoader.style.display = 'none';
@@ -834,10 +1076,11 @@ function handleSubmissionSuccess() {
     resetPhotoPreview();
     clearFormAutoSave();
     clearFormErrors(applicationForm);
+    showNotification('✨ Candidatura enviada com sucesso!', 'success');
 }
 
 function handleSubmissionError(error) {
-    showNotification('❌ Erro ao enviar: ' + error.message, 'error');
+    showNotification('❌ Erro ao enviar: ' + (error.message || error), 'error');
 }
 
 function setSubmitButtonState(loading) {
