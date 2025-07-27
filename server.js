@@ -80,7 +80,7 @@ app.post('/api/candidatura', upload.single('foto'), async (req, res) => {
     ]);
 
     if (error) {
-      console.error('❌ Erro ao salvar no Supabase:', error.message);
+      console.error('❌ Erro ao salvar no Supabase:', error);
       return res.status(500).json({ error: 'Erro ao salvar candidatura' });
     }
 
