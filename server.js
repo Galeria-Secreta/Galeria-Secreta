@@ -40,17 +40,23 @@ app.post('/api/candidatura', upload.single('foto'), async (req, res) => {
 
     // Upload da imagem para Supabase Storage
     let foto_url = null;
+    let foto_path = null;
+    let foto_nome = null;
 
     if (foto) {
       const ext = path.extname(foto.originalname);
-      const storagePath = `fotos/${Date.now()}_${foto.originalname}`;
+      foto_nome = foto.originalname;
+      foto_path = `fotos/${Date.now()}_${foto_nome}`;
       const fileBuffer = fs.readFileSync(foto.path);
 
       const { error: uploadError } = await supabase.storage
         .from('candidaturas-fotos')
-        .upload(storagePath, fileBuffer, {
+        .upload(foto_path, fileBuffer, {
           contentType: mime.lookup(ext) || 'image/jpeg',
         });
+
+      // Remove o arquivo temporário local após upload
+      fs.unlinkSync(foto.path);
 
       if (uploadError) {
         console.error('❌ Erro ao enviar imagem:', uploadError.message);
@@ -60,7 +66,7 @@ app.post('/api/candidatura', upload.single('foto'), async (req, res) => {
       // URL pública da imagem
       const { data: publicUrlData } = supabase.storage
         .from('candidaturas-fotos')
-        .getPublicUrl(storagePath);
+        .getPublicUrl(foto_path);
 
       foto_url = publicUrlData?.publicUrl;
     }
@@ -75,19 +81,23 @@ app.post('/api/candidatura', upload.single('foto'), async (req, res) => {
         email,
         whatsapp,
         foto_url,
-        termos_aceit: true, // Valor padrão (você pode mudar se for checkbox)
+        foto_nome,
+        foto_path,
+        termos_aceit: true,
+        status: 'pendente',
+        observacoes: '',
       },
     ]);
 
     if (error) {
-      console.error('❌ Erro ao salvar no Supabase:', error);
-      return res.status(500).json({ error: 'Erro ao salvar candidatura' });
+      console.error('❌ Erro ao salvar no Supabase:', error.message);
+      return res.status(500).json({ error: 'Erro ao salvar candidatura', detalhes: error.message });
     }
 
     console.log('✅ Candidatura salva com sucesso');
     res.status(200).json({ message: 'Candidatura enviada com sucesso!', data });
   } catch (err) {
-    console.error('❌ Erro inesperado:', err);
+    console.error('❌ Erro inesperado:', err.message);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
